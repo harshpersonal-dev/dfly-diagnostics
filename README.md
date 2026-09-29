@@ -1,77 +1,35 @@
-# Dfly Diagnostics App
+# Dfly Desk (dfly-diagnostics)
 
-A small local web app: pick a generic Dfly number and a date range, and it
-runs the ADF stationarity test, half-life, quality score, median/max heat,
-stop-out rate, and reward-to-risk on exactly that slice of history.
+Streamlit app with three top-level tabs:
 
-Your uploaded data (`convertcsv.md`) has already been converted into
-`dflies_data.csv` and is included here — you don't need to re-run the
-converter unless you get updated source data.
+| Tab | What it is | Logic status |
+|---|---|---|
+| Diagnostics | ADF, half-life, quality score, heat, correlations | `diagnostics.py` **unchanged**; `views/page_diagnostics.py` is the old `app.py` (only `set_page_config` removed, data path fixed, `use_container_width` -> `width="stretch"`) |
+| Seasonality | Period-wise percentile seasonality | `curves/seasonality.py` and `curves/data_loader.py` **unchanged**; page rebuilt as UI only |
+| Kink MAD | Live 1MDF strip from the QH Fairvalue API, two kink methods combined | new (`kink/`) |
 
-## Files
+Removed: old Curve Kink Scanner, Contract Lifecycle (`kink_detection.py`, `lifecycle.py`, old pages).
 
-- `app.py` — the Streamlit app (what you run)
-- `diagnostics.py` — the analysis functions (ADF, half-life, quality score,
-  heat) — same math as the earlier scripts in this conversation, just
-  packaged as reusable functions
-- `convert_data.py` — parses the pipe-delimited markdown table (with Excel
-  serial dates) into a clean CSV. Only needed if you get a new source file.
-- `dflies_data.csv` — your data, already converted and ready to use
-
-## How to run
-
-1. Install dependencies (one time):
-
-   ```
-   pip install streamlit pandas numpy statsmodels
-   ```
-
-2. From inside this folder, launch the app:
-
-   ```
-   streamlit run app.py
-   ```
-
-3. It will open automatically in your browser (usually
-   `http://localhost:8501`). If it doesn't, open that URL manually.
-
-## Using the app
-
-- **Sidebar → Generic Dfly number**: pick which Dfly (CO1-2-3-4,
-  CO2-3-4-5, etc.) to analyze.
-- **Sidebar → Duration**: choose a preset (20 days, 1 month, 3/6 months,
-  1 year, full history) or "Custom range" to pick any start/end date
-  directly from your data.
-- **Sidebar → Trade parameters**: set your tick size, dollar value per
-  tick, and stop distance in ticks — this converts your dollar risk into
-  the price-unit stop distance used for the stop-out rate and
-  reward-to-risk calculations. Defaults are pre-filled for a $10/tick,
-  2-tick ($20) stop.
-- **Sidebar → Entry z-score / Rolling lookback / ADF regression type**:
-  advanced knobs if you want to test sensitivity to these choices.
-
-The main panel shows the selected series as a chart, then four metric
-panels: ADF stat/p-value/verdict, half-life/quality score, median/max
-heat, and stop-out rate/reward-to-risk. Expand "Full raw output" for every
-number in one place, and "ADF critical values" to see the exact table the
-p-value was compared against.
-
-## Updating with new data
-
-If you get a fresh version of the source markdown file, drop it in this
-folder as `convertcsv.md` and re-run:
-
+## Setup (VS Code)
 ```
-python convert_data.py
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+pip install -r requirements.txt
 ```
+Copy into `data/`: your CurveTerminal workbook (`CurveTerminal_CO_2014-07-11_....xlsx`), then once:
+```
+python prepare_curve_data.py --source data/<your workbook>.xlsx    # writes data/prepared/ (needed by Seasonality)
+streamlit run app.py
+```
+Bundled in `data/`: `dflies_data.csv`, `CO-1MDF.xlsx` (manual snapshot), `CO_dflies_sept_futures_curve_edited.xlsx` (Method B history).
 
-This regenerates `dflies_data.csv`. Refresh the running app (or restart
-it) to pick up the new data — `st.cache_data` will otherwise keep serving
-the old file from cache within a single running session.
+## Kink MAD tab
+1. Connect to the VPN, pick **Live (QH API)**, paste the **raw** token (no `Bearer`), press **Test connection**.
+2. Set the first strip contract (default `COH27`) and number of dflies (default 16). Dfly *i* = `P[i] - 3P[i+1] + 3P[i+2] - P[i+3]`, named after its first leg.
+3. Polling: one batched request every 10 s (never faster than 8 s). 429 -> 2/4/8 s backoff, 3 retries. After 3 consecutive failed polls a leg is STALE and every dfly using it is blanked.
+4. Method A (MAD / fixed ticks / turning points) and Method B (normalised kink z vs history) are shown per contract; **CONFIRMED** = both flag it.
+5. **Manual snapshot** mode analyses an uploaded `CO-1MDF.xlsx` with no API.
 
-## Notes on the calculations
+The token is held only in `st.session_state`; it is never written to disk. API calls run in Python, so browser CORS does not apply. If TLS errors appear on the corporate network, set `REQUESTS_CA_BUNDLE` to your company CA `.pem`.
 
-See the parameter reference document from earlier in this conversation
-(`dfly_parameters_explained.md`) for the exact formulas and worked
-examples behind ADF, half-life, quality score, and heat. `diagnostics.py`
-implements those same formulas exactly.
+Tests: `python tests/test_kink_mad.py`
